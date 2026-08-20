@@ -13,6 +13,8 @@ use icicle_bn254::curve::{G1Projective, G2Projective, ScalarField};
 use clap::Parser;
 use icicle_core::{msm, traits::GenerateRandom};
 
+use std::time::Instant;
+
 #[derive(Parser, Debug)]
 struct Args {
     /// Lower bound (inclusive) of MSM sizes to run for
@@ -66,14 +68,21 @@ fn main() {
             log_size, size
         );
 
-        // Setting Bn254 points and scalars
-        let points = upper_points[..size].into_slice();
-        let g2_points = g2_upper_points[..size].into_slice();
-        let scalars = upper_scalars[..size].into_slice();
+        let points_ref = &upper_points[..size];
+        let points = points_ref.into_slice();
+
+        let g2_points_ref = &g2_upper_points[..size];
+        let g2_points = g2_points_ref.into_slice();
+
+        let scalars_ref = &upper_scalars[..size];
+        let scalars = scalars_ref.into_slice();
 
         // Setting bls12377 points and scalars
-        let points_bls12377 = upper_points_bls12377[..size].into_slice();
-        let scalars_bls12377 = upper_scalars_bls12377[..size].into_slice();
+        let points_bls12377_ref = &upper_points_bls12377[..size];
+        let points_bls12377 = points_bls12377_ref.into_slice();
+
+        let scalars_bls12377_ref = &upper_scalars_bls12377[..size];
+        let scalars_bls12377 = scalars_bls12377_ref.into_slice();
 
         println!("Configuring bn254 MSM...");
         let mut msm_results = DeviceVec::<G1Projective>::malloc(1);
@@ -94,19 +103,30 @@ fn main() {
         cfg_bls12377.stream_handle = *stream_bls12377;
         cfg_bls12377.is_async = true;
 
-        println!("Executing bn254 MSM on device...");
+        // ***** G1 BN254
+        println!("\n*******************************");
+        println!("Executing G1 bn254 MSM on device...");
+        let start = Instant::now();
+
         msm::msm(scalars, points, &cfg, msm_results.into_slice_mut()).unwrap();
-        msm::msm(scalars, g2_points, &g2_cfg, g2_msm_results.into_slice_mut()).unwrap();
 
-        println!("Executing bls12377 MSM on device...");
-        msm::msm(scalars_bls12377, points_bls12377, &cfg_bls12377, msm_results_bls12377.into_slice_mut()).unwrap();
-
-        println!("Moving results to host...");
         stream
             .synchronize()
             .unwrap();
         let msm_host_result = msm_results.to_host_vec();
-        println!("bn254 result: {:#?}", msm_host_result);
+        println!("G1 bn254 result: {:#?}", msm_host_result);
+
+        println!(
+            "G1 bn254 took: {:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // ***** G2 BN254
+        println!("\n*******************************");
+        println!("Executing G2 bn254 MSM on device...");
+        let start = Instant::now();
+
+        msm::msm(scalars, g2_points, &g2_cfg, g2_msm_results.into_slice_mut()).unwrap();
 
         g2_stream
             .synchronize()
@@ -114,12 +134,30 @@ fn main() {
         let g2_msm_host_result = g2_msm_results.to_host_vec();
         println!("G2 bn254 result: {:#?}", g2_msm_host_result);
 
+        println!(
+            "G2 bn254 took: {:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // ***** BLS12377
+        println!("\n*******************************");
+        println!("Executing bls12377 MSM on device...");
+        let start = Instant::now();
+
+        msm::msm(scalars_bls12377, points_bls12377, &cfg_bls12377, msm_results_bls12377.into_slice_mut()).unwrap();
+
         stream_bls12377
             .synchronize()
             .unwrap();
         let msm_host_result_bls12377 = msm_results_bls12377.to_host_vec();
         println!("bls12377 result: {:#?}", msm_host_result_bls12377);
 
+        println!(
+            "bls12377 took: {:.3} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // Cleanup
         println!("Cleaning up bn254...");
         stream
             .destroy()
